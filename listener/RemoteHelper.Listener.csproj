@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Two builds from one codebase:
+       net7.0          — console app, runs on macOS for development/testing
+       net7.0-windows  — the real thing: windowless tray app for the PC -->
+  <PropertyGroup>
+    <TargetFrameworks>net7.0;net7.0-windows</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>RemoteHelper.Listener</RootNamespace>
+    <AssemblyName>RemoteHelperListener</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$(TargetFramework.Contains('windows'))">
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup Condition="!$(TargetFramework.Contains('windows'))">
+    <Compile Remove="TrayApp.cs" />
+    <Compile Remove="WindowsPairingUI.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="app.ico" />
+    <PackageReference Include="Makaretu.Dns.Multicast" Version="0.27.0" />
+  </ItemGroup>
+
+</Project>

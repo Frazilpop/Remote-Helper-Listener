@@ -1,0 +1,6 @@
+listener/bin/
+listener/obj/
+dist/
+RemoteHelperListener.exe
+__pycache__/
+.DS_Store
