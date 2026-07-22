@@ -60,6 +60,11 @@ its 6-digit code once. Traffic is unencrypted, so this is designed for a
 trusted home network, not a hostile one. See
 [docs/PROTOCOL.md](docs/PROTOCOL.md) for the full model.
 
+## Privacy
+
+Remote Helper collects nothing and sends nothing to anyone — everything
+stays on your own devices and network. See [PRIVACY.md](PRIVACY.md).
+
 ## Credits
 
 Mascots and colour scheme come from
