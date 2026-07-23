@@ -6,33 +6,40 @@ namespace RemoteHelper.Listener;
 /// The Windows pairing popup: a small, always-on-top window showing the
 /// 6-digit code for the device that's trying to connect. Appears only
 /// during pairing (once per device, ever), so it doesn't disturb the
-/// otherwise-silent tray app. Server callbacks arrive on background
+/// otherwise-silent tray app. One window per device: if the same device
+/// asks again (it reconnected mid-pair), its old window is replaced rather
+/// than joined by an identical twin. Server callbacks arrive on background
 /// threads, so every UI touch is marshalled onto the WinForms thread.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class WindowsPairingUI : IPairingUI
 {
     private readonly Control _marshal;
-    private readonly Dictionary<Guid, Form> _forms = new();
+    private readonly Dictionary<string, Form> _forms = new();
 
     public WindowsPairingUI(Control marshal) => _marshal = marshal;
 
-    public void Show(Guid session, string deviceName, string pin)
+    public void Show(string deviceId, string deviceName, string pin)
     {
         _marshal.BeginInvoke(new Action(() =>
         {
+            if (_forms.Remove(deviceId, out var old))
+            {
+                old.Close();
+                old.Dispose();
+            }
             var form = BuildForm(deviceName, pin);
-            _forms[session] = form;
+            _forms[deviceId] = form;
             form.Show();
             form.Activate();
         }));
     }
 
-    public void Close(Guid session, bool success)
+    public void Close(string deviceId, bool success)
     {
         _marshal.BeginInvoke(new Action(() =>
         {
-            if (_forms.Remove(session, out var form))
+            if (_forms.Remove(deviceId, out var form))
             {
                 form.Close();
                 form.Dispose();

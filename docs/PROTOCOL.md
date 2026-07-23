@@ -53,6 +53,14 @@ treated as errors — that's what lets old clients talk to new listeners.
   `deviceId` forever) or `{"t":"pair_failed","attemptsLeft":N}`. Three
   wrong codes drops the connection.
 
+The code is per *device*, not per connection: if the device drops and
+reconnects mid-pair (flaky Wi-Fi, an app relaunch), the PC shows the
+**same** code again (it keeps an unfinished code warm for ~10 minutes),
+so the number on the screen never changes out from under whoever is
+typing it — and one device never has two code windows open at once.
+A `pair` from a device that's somehow already trusted just gets
+`paired` back; it's idempotent.
+
 The device id lives in the phone's keychain, so it survives app
 reinstalls — a device really does pair once and never again. Trust is
 per (device, PC) pair: N devices and M PCs each pair once, independently.
@@ -79,8 +87,30 @@ is irrelevant — `£` is `£` everywhere.
 {"t":"pong"}   // listener → client
 ```
 
-Clients ping every 10 s; a client that sees no pong for 30 s declares the
-link dead and reconnects. Either side may simply close the socket.
+Clients ping every 10 s from the moment the connection is up — including
+while pairing is still pending (the listener answers pings pre-auth). A
+client that sees no pong for 30 s declares the link dead and reconnects.
+The listener mirrors that: a connection silent for 60 s is presumed dead
+and closed. Either side may simply close the socket.
+
+## Ghosts and reconnects
+
+Apps get killed, phones sleep, Wi-Fi roams — all of which leave the
+listener holding a half-open socket that looks exactly like a quiet one.
+Two rules keep those ghosts harmless:
+
+- **A hello supersedes.** When a device says hello and the listener
+  already holds a connection for the same `deviceId` that has been silent
+  for 25 s+, that old connection is closed: a device id names exactly one
+  physical device, so the old connection is this very device's ghost. A
+  previous connection that is still pinging is left alone — one device
+  legitimately holding two live connections is fine.
+- **Silence reaps.** The 60 s rule above eventually clears any ghost even
+  if its device never returns.
+
+Different device ids never interfere: any number of devices sit connected
+to one listener side by side, and closing one device's ghost never
+touches another device's connection.
 
 ## Security note
 
