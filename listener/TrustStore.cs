@@ -47,6 +47,18 @@ public sealed class TrustStore
         }
     }
 
+    /// <summary>Forget every paired device. Each one shows a pairing code
+    /// again the next time it connects.</summary>
+    public void Clear()
+    {
+        lock (_lock)
+        {
+            _devices.Clear();
+            try { File.WriteAllText(_path, "[]"); }
+            catch (IOException) { }
+        }
+    }
+
     private List<Device> Load()
     {
         try

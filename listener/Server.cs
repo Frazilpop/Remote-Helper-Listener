@@ -82,6 +82,19 @@ public sealed class Server
     /// <summary>How many devices have ever paired with this PC.</summary>
     public int PairedCount => _trust.Count;
 
+    /// <summary>The tray's "clear paired devices": forget every trust and drop
+    /// every live connection, so each device re-pairs on its automatic
+    /// reconnect a few seconds later — nothing keeps typing on old credit.</summary>
+    public void ForgetAllDevices()
+    {
+        _trust.Clear();
+        foreach (var conn in _conns.Values)
+        {
+            try { conn.Life.Cancel(); } catch (ObjectDisposedException) { }
+        }
+        Log.Line("[auth] all paired devices forgotten — each re-pairs on its next connect");
+    }
+
     public async Task RunAsync(int port, CancellationToken ct)
     {
         var tcp = new TcpListener(IPAddress.Any, port);

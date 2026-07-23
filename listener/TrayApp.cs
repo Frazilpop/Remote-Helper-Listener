@@ -61,6 +61,28 @@ internal static class TrayApp
             if (File.Exists(Log.FilePath))
                 Process.Start(new ProcessStartInfo(Log.FilePath) { UseShellExecute = true });
         };
+        var clearPaired = new ToolStripMenuItem("Clear paired devices…");
+        clearPaired.Click += (_, _) =>
+        {
+            var n = server.PairedCount;
+            if (n == 0)
+            {
+                icon.BalloonTipTitle = "Remote Helper";
+                icon.BalloonTipText = "No paired devices to clear.";
+                icon.ShowBalloonTip(4000);
+                return;
+            }
+            var word = n == 1 ? "device" : "devices";
+            var answer = MessageBox.Show(
+                $"Forget all {n} paired {word}?\n\nEach one shows its pairing code on this screen again the next time it connects.",
+                "Remote Helper — clear paired devices",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+            if (answer != DialogResult.Yes) return;
+            server.ForgetAllDevices();
+            icon.BalloonTipTitle = "Remote Helper";
+            icon.BalloonTipText = $"Forgot {n} {word}. Each will ask to pair again.";
+            icon.ShowBalloonTip(4000);
+        };
         var quit = new ToolStripMenuItem("Quit");
         quit.Click += (_, _) => Application.Exit();
 
@@ -68,6 +90,7 @@ internal static class TrayApp
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(autostart);
         menu.Items.Add(openLog);
+        menu.Items.Add(clearPaired);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(quit);
         icon.ContextMenuStrip = menu;
