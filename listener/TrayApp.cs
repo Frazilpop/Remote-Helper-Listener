@@ -40,14 +40,16 @@ internal static class TrayApp
         var server = Program.CreateServer(echo: false, new WindowsPairingUI(marshaller));
         var serverTask = Program.RunServerAsync(server, port, noMdns, cts.Token);
 
+        var version = ListenerVersion();
         using var icon = new NotifyIcon
         {
             Icon = LoadTrayIcon(),
             Visible = true,
-            Text = $"Remote Helper — listening on port {port}",
+            Text = $"Remote Helper {version} — listening on port {port}",
         };
 
         var menu = new ContextMenuStrip();
+        var about = new ToolStripMenuItem($"Remote Helper {version}") { Enabled = false };
         var status = new ToolStripMenuItem($"Listening on port {port}") { Enabled = false };
         var autostart = new ToolStripMenuItem("Start with Windows")
         {
@@ -86,6 +88,7 @@ internal static class TrayApp
         var quit = new ToolStripMenuItem("Quit");
         quit.Click += (_, _) => Application.Exit();
 
+        menu.Items.Add(about);
         menu.Items.Add(status);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(autostart);
@@ -101,26 +104,28 @@ internal static class TrayApp
         string Summary()
         {
             var clients = server.ConnectedClients;
+            // Kept short: with the version prefixed, the tooltip has to fit
+            // NotifyIcon's 63-char cap without losing the paired count.
             return clients.Length == 0
-                ? $"No device connected — waiting ({server.PairedCount} paired)"
+                ? $"waiting for a device ({server.PairedCount} paired)"
                 : $"Connected: {string.Join(", ", clients)}";
         }
         var poll = new System.Windows.Forms.Timer { Interval = 2000 };
         poll.Tick += (_, _) =>
         {
-            var text = $"Remote Helper — {Summary()}";
+            var text = $"Remote Helper {version} — {Summary()}";
             icon.Text = text.Length <= 63 ? text : text[..60] + "…"; // NotifyIcon tooltip cap
             status.Text = Summary();
         };
         poll.Start();
         icon.DoubleClick += (_, _) =>
         {
-            icon.BalloonTipTitle = "Remote Helper";
+            icon.BalloonTipTitle = $"Remote Helper {version}";
             icon.BalloonTipText = $"{Summary()} · port {port}";
             icon.ShowBalloonTip(4000);
         };
 
-        icon.BalloonTipTitle = "Remote Helper is running";
+        icon.BalloonTipTitle = $"Remote Helper {version} is running";
         icon.BalloonTipText = "Waiting for your phone. It starts with Windows automatically.";
         icon.ShowBalloonTip(4000);
 
@@ -174,6 +179,18 @@ internal static class TrayApp
         else
             key.DeleteValue(RunValueName, throwOnMissingValue: false);
         Log.Line($"[sys]  start with Windows: {(enabled ? "on" : "off")}");
+    }
+
+    /// <summary>"v1.3.0" — the csproj &lt;Version&gt;, stripped of any "+sha"
+    /// suffix newer SDKs append to the informational version.</summary>
+    private static string ListenerVersion()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var info = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion.Split('+')[0];
+        return "v" + (string.IsNullOrEmpty(info)
+            ? assembly.GetName().Version?.ToString(3) ?? "?"
+            : info);
     }
 
     private static Icon LoadTrayIcon()

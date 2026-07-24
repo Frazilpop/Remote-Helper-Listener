@@ -13,6 +13,9 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- Single source of truth for the listener version: the tray shows it,
+         and tools/publish-public.sh refuses a release tag that disagrees. -->
+    <Version>1.3.0</Version>
   </PropertyGroup>
 
   <PropertyGroup Condition="$(TargetFramework.Contains('windows'))">
