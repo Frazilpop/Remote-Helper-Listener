@@ -16,7 +16,9 @@ public static class Program
             port = p;
 
 #if WINDOWS
-        TrayApp.Run(port, noMdns);
+        // --installed is how the installer tells the copy it just launched
+        // "announce yourself"; normal starts (autostart, manual) stay silent.
+        TrayApp.Run(port, noMdns, justInstalled: args.Contains("--installed"));
 #else
         RunConsole(port, noMdns, echo);
 #endif

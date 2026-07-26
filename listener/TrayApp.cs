@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Versioning;
+using System.Text.Json;
 using Microsoft.Win32;
 
 namespace RemoteHelper.Listener;
@@ -19,8 +20,11 @@ internal static class TrayApp
 {
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValueName = "RemoteHelper";
+    private const string LatestReleaseApi =
+        "https://api.github.com/repos/Frazilpop/Remote-Helper-Listener/releases/latest";
+    private const string ReleaseAssetName = "RemoteHelperListener.exe";
 
-    public static void Run(int port, bool noMdns)
+    public static void Run(int port, bool noMdns, bool justInstalled)
     {
         if (RelaunchedInstalledCopy()) return;
 
@@ -45,7 +49,7 @@ internal static class TrayApp
         {
             Icon = LoadTrayIcon(),
             Visible = true,
-            Text = $"Remote Helper {version} — listening on port {port}",
+            Text = "Remote Helper",
         };
 
         var menu = new ContextMenuStrip();
@@ -85,6 +89,13 @@ internal static class TrayApp
             icon.BalloonTipText = $"Forgot {n} {word}. Each will ask to pair again.";
             icon.ShowBalloonTip(4000);
         };
+        var checkUpdates = new ToolStripMenuItem("Check for updates…");
+        checkUpdates.Click += async (_, _) =>
+        {
+            checkUpdates.Enabled = false;
+            try { await CheckForUpdatesAsync(icon, checkUpdates); }
+            finally { checkUpdates.Enabled = true; }
+        };
         var quit = new ToolStripMenuItem("Quit");
         quit.Click += (_, _) => Application.Exit();
 
@@ -94,29 +105,23 @@ internal static class TrayApp
         menu.Items.Add(autostart);
         menu.Items.Add(openLog);
         menu.Items.Add(clearPaired);
+        menu.Items.Add(checkUpdates);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(quit);
         icon.ContextMenuStrip = menu;
 
-        // Live status: tooltip + menu line track who's connected (polled on
-        // the UI thread — no cross-thread marshalling to get wrong), and
+        // Live status: the menu line tracks who's connected (polled on the
+        // UI thread — no cross-thread marshalling to get wrong), and
         // double-clicking the icon pops the same summary as a balloon.
         string Summary()
         {
             var clients = server.ConnectedClients;
-            // Kept short: with the version prefixed, the tooltip has to fit
-            // NotifyIcon's 63-char cap without losing the paired count.
             return clients.Length == 0
                 ? $"waiting for a device ({server.PairedCount} paired)"
                 : $"Connected: {string.Join(", ", clients)}";
         }
         var poll = new System.Windows.Forms.Timer { Interval = 2000 };
-        poll.Tick += (_, _) =>
-        {
-            var text = $"Remote Helper {version} — {Summary()}";
-            icon.Text = text.Length <= 63 ? text : text[..60] + "…"; // NotifyIcon tooltip cap
-            status.Text = Summary();
-        };
+        poll.Tick += (_, _) => status.Text = Summary();
         poll.Start();
         icon.DoubleClick += (_, _) =>
         {
@@ -125,9 +130,14 @@ internal static class TrayApp
             icon.ShowBalloonTip(4000);
         };
 
-        icon.BalloonTipTitle = $"Remote Helper {version} is running";
-        icon.BalloonTipText = "Waiting for your phone. It starts with Windows automatically.";
-        icon.ShowBalloonTip(4000);
+        // Announce only when the installer just put us here (first install or
+        // an update); every ordinary start — autostart included — is silent.
+        if (justInstalled)
+        {
+            icon.BalloonTipTitle = $"Remote Helper {version} installed";
+            icon.BalloonTipText = "Waiting for your phone. It starts with Windows automatically.";
+            icon.ShowBalloonTip(4000);
+        }
 
         Application.Run();
 
@@ -160,9 +170,88 @@ internal static class TrayApp
             catch (IOException) when (attempt < 10) { Thread.Sleep(300); }
         }
 
-        SetAutostart(true);
-        Process.Start(new ProcessStartInfo(installed) { UseShellExecute = true });
+        // Register the INSTALLED copy, not this one: pointing the Run key at
+        // the exe we were launched from would re-run this installer (and its
+        // "installed" balloon) on every boot.
+        SetAutostart(true, installed);
+        Process.Start(new ProcessStartInfo(installed)
+        {
+            Arguments = "--installed",
+            UseShellExecute = true,
+        });
         return true;
+    }
+
+    /// <summary>
+    /// "Check for updates" against the public GitHub releases. If a newer
+    /// version is out there (and the user says yes), download its exe to a
+    /// temp file and run it — the exe is its own installer (see class docs),
+    /// so it stops this process, copies itself into place and relaunches.
+    /// </summary>
+    private static async Task CheckForUpdatesAsync(NotifyIcon icon, ToolStripMenuItem item)
+    {
+        void Balloon(string title, string text)
+        {
+            icon.BalloonTipTitle = title;
+            icon.BalloonTipText = text;
+            icon.ShowBalloonTip(4000);
+        }
+
+        var current = ListenerVersion(); // "v1.4.0"
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd($"RemoteHelperListener/{current.TrimStart('v')}");
+
+            using var doc = JsonDocument.Parse(await http.GetStringAsync(LatestReleaseApi));
+            var tag = doc.RootElement.GetProperty("tag_name").GetString() ?? "";
+            if (!Version.TryParse(tag.TrimStart('v', 'V'), out var latest))
+            {
+                Balloon("Remote Helper", $"Couldn't make sense of the latest release ({tag}).");
+                return;
+            }
+            Version.TryParse(current.TrimStart('v'), out var mine);
+            if (latest <= (mine ?? new Version(0, 0, 0)))
+            {
+                Balloon("Remote Helper", $"You're up to date — {current} is the latest.");
+                return;
+            }
+
+            string? url = null;
+            foreach (var asset in doc.RootElement.GetProperty("assets").EnumerateArray())
+                if (asset.GetProperty("name").GetString() == ReleaseAssetName)
+                    url = asset.GetProperty("browser_download_url").GetString();
+            if (url is null)
+            {
+                Balloon("Remote Helper", $"{tag} is out but has no Windows exe attached yet.");
+                return;
+            }
+
+            var answer = MessageBox.Show(
+                $"Version {latest} is available (you have {current}).\n\nUpdate now? Remote Helper restarts itself when it's done.",
+                "Remote Helper — update available",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+            if (answer != DialogResult.Yes) return;
+
+            item.Text = "Downloading update…";
+            var tmp = Path.Combine(Path.GetTempPath(), "RemoteHelperListener-update.exe");
+            await using (var src = await http.GetStreamAsync(url))
+            await using (var dst = File.Create(tmp))
+                await src.CopyToAsync(dst);
+
+            Log.Line($"[sys]  update: handing over to v{latest} installer at {tmp}");
+            Process.Start(new ProcessStartInfo(tmp) { UseShellExecute = true });
+            // The installer kills this process any moment now.
+        }
+        catch (Exception ex)
+        {
+            Log.Line($"[warn] update check failed: {ex.Message}");
+            Balloon("Remote Helper", $"Update check failed: {ex.Message}");
+        }
+        finally
+        {
+            item.Text = "Check for updates…";
+        }
     }
 
     private static bool IsAutostartEnabled()
@@ -171,11 +260,13 @@ internal static class TrayApp
         return key?.GetValue(RunValueName) is not null;
     }
 
-    private static void SetAutostart(bool enabled)
+    private static void SetAutostart(bool enabled) => SetAutostart(enabled, Environment.ProcessPath!);
+
+    private static void SetAutostart(bool enabled, string exePath)
     {
         using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath);
         if (enabled)
-            key.SetValue(RunValueName, $"\"{Environment.ProcessPath}\"");
+            key.SetValue(RunValueName, $"\"{exePath}\"");
         else
             key.DeleteValue(RunValueName, throwOnMissingValue: false);
         Log.Line($"[sys]  start with Windows: {(enabled ? "on" : "off")}");

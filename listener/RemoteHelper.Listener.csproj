@@ -14,8 +14,10 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- Single source of truth for the listener version: the tray shows it,
-         and tools/publish-public.sh refuses a release tag that disagrees. -->
-    <Version>1.3.0</Version>
+         "Check for updates" compares it against the latest release tag, and
+         tools/publish-public.sh refuses a release tag that disagrees.
+         Bump BEFORE building a release exe. -->
+    <Version>1.4.0</Version>
   </PropertyGroup>
 
   <PropertyGroup Condition="$(TargetFramework.Contains('windows'))">
