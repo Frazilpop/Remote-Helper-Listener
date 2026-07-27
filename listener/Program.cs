@@ -43,7 +43,12 @@ public static class Program
 
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-        var server = CreateServer(echo, new ConsolePairingUI());
+        // Real use on a Mac gets the code in a dialog like Windows does;
+        // --echo is protocol testing and stays console-only on any OS.
+        IPairingUI pairing = !echo && OperatingSystem.IsMacOS()
+            ? new MacPairingUI()
+            : new ConsolePairingUI();
+        var server = CreateServer(echo, pairing);
         RunServerAsync(server, port, noMdns, cts.Token).GetAwaiter().GetResult();
     }
 #endif

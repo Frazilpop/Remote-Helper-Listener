@@ -10,10 +10,10 @@
 ```
 
 Remote Helper turns your iPhone or iPad into a wireless keyboard for your
-Windows PC. Everything travels over your own Wi-Fi — no cloud, no
+Windows PC or Mac. Everything travels over your own Wi-Fi — no cloud, no
 accounts. This repository is the **listener**: the small program that
-runs on the PC, receives keystrokes, and types them into whatever window
-is focused.
+runs on the computer, receives keystrokes, and types them into whatever
+window is focused.
 
 The iPhone/iPad app that talks to it is a companion piece and isn't part
 of this repository — but the wire protocol is fully documented in
@@ -37,6 +37,25 @@ type it on the device once, and that device is trusted from then on.
 To type into windows that run as administrator, run the listener as
 administrator too.
 
+## Install (Mac)
+
+1. Download `RemoteHelperListener-mac-arm64.zip` (Apple Silicon) or
+   `RemoteHelperListener-mac-x64.zip` (Intel) from the
+   [Releases page](../../releases) and unzip it.
+2. Run it from a terminal: `./RemoteHelperListener`. First run: the
+   binary is unsigned, so macOS will refuse politely — approve it under
+   **System Settings → Privacy & Security → Open Anyway**, or clear the
+   quarantine flag instead:
+   `xattr -d com.apple.quarantine RemoteHelperListener`.
+3. Grant the two permissions macOS asks about:
+   - **Local Network** — so devices can find and reach it.
+   - **Accessibility** (System Settings → Privacy & Security →
+     Accessibility, for your terminal app) — so it's allowed to type.
+
+Pairing works like on Windows: a dialog shows the 6-digit code the first
+time a new device connects. The listener runs for as long as its
+terminal window stays open — there's no menu bar app (yet).
+
 ## Build from source
 
 The listener is one C#/.NET 7 codebase that targets two platforms:
@@ -45,7 +64,10 @@ The listener is one C#/.NET 7 codebase that targets two platforms:
 # Windows tray app (self-contained single exe):
 tools/build-windows.sh          # cross-compiles from macOS/Linux too
 
-# macOS console build, for development:
+# macOS binaries (self-contained, both architectures):
+tools/build-mac.sh
+
+# macOS, straight from source:
 dotnet run --project listener -f net7.0            # real typing (needs Accessibility permission)
 dotnet run --project listener -f net7.0 -- --echo  # prints keystrokes instead of typing
 ```
