@@ -17,7 +17,7 @@
          "Check for updates" compares it against the latest release tag, and
          tools/publish-public.sh refuses a release tag that disagrees.
          Bump BEFORE building a release exe. -->
-    <Version>1.6.1</Version>
+    <Version>1.7.0</Version>
   </PropertyGroup>
 
   <PropertyGroup Condition="$(TargetFramework.Contains('windows'))">

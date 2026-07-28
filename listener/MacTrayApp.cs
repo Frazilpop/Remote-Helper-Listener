@@ -41,6 +41,7 @@ internal static class MacTrayApp
     // Keep the IMP delegates alive for the lifetime of the process.
     private static readonly ActionImp ActionThunk = OnMenuAction;
     private static readonly ActionImp MenuUpdateThunk = OnMenuNeedsUpdate;
+    private static readonly ActionImp PairDrainThunk = OnPairDrain;
 
     public static void Run(int port, bool noMdns)
     {
@@ -54,8 +55,9 @@ internal static class MacTrayApp
         // framework is actually in the process.
         NativeLibrary.Load("/System/Library/Frameworks/AppKit.framework/AppKit");
         _port = port;
+        CreateTarget();
         using var cts = new CancellationTokenSource();
-        _server = Program.CreateServer(echo: false, new MacPairingUI());
+        _server = Program.CreateServer(echo: false, new TrayPairingUI());
         var serverTask = Program.RunServerAsync(_server, port, noMdns, cts.Token);
 
         var app = Send(Cls("NSApplication"), Sel("sharedApplication"));
@@ -71,18 +73,26 @@ internal static class MacTrayApp
         Log.Line("[sys]  mac tray app quit");
     }
 
-    private static void BuildStatusItem()
+    /// <summary>
+    /// One runtime-built ObjC class serves as the menu items' action target,
+    /// the menu's delegate (for the live status line), and the main-thread
+    /// trampoline the pairing windows bounce through.
+    /// </summary>
+    private static void CreateTarget()
     {
-        // One ObjC class serves as both the menu items' action target and
-        // the menu's delegate (for the live status line).
         var cls = objc_allocateClassPair(Cls("NSObject"), "RHTrayTarget", 0);
         class_addMethod(cls, Sel("rhAction:"),
             Marshal.GetFunctionPointerForDelegate(ActionThunk), "v@:@");
         class_addMethod(cls, Sel("menuNeedsUpdate:"),
             Marshal.GetFunctionPointerForDelegate(MenuUpdateThunk), "v@:@");
+        class_addMethod(cls, Sel("rhPairDrain:"),
+            Marshal.GetFunctionPointerForDelegate(PairDrainThunk), "v@:@");
         objc_registerClassPair(cls);
         _target = Send(Send(cls, Sel("alloc")), Sel("init"));
+    }
 
+    private static void BuildStatusItem()
+    {
         var version = Program.ListenerVersion();
         var menu = Send(Send(Cls("NSMenu"), Sel("alloc")), Sel("init"));
         AddItem(menu, $"Remote Helper {version}", null);
@@ -129,6 +139,9 @@ internal static class MacTrayApp
             catch (Exception ex) { Log.Line($"[warn] menu action failed: {ex.Message}"); }
         }
     }
+
+    private static void OnPairDrain(IntPtr self, IntPtr sel, IntPtr arg) =>
+        TrayPairingUI.DrainOnMainThread();
 
     private static void OnMenuNeedsUpdate(IntPtr self, IntPtr sel, IntPtr menu)
     {
@@ -281,15 +294,16 @@ internal static class MacTrayApp
     }
 
     /// <summary>
-    /// The mascot, embedded as 18/36px PNGs and combined into one 18pt
-    /// template image — macOS then renders it black or white to match the
-    /// menu bar, like every native status icon.
+    /// The mascot, embedded as 1x/2x PNGs and combined into one 22x18pt
+    /// template image (his monitor is wider than tall, and the status item
+    /// stretches to fit) — macOS then renders it black or white to match
+    /// the menu bar, like every native status icon.
     /// </summary>
     private static IntPtr LoadMascotIcon()
     {
         try
         {
-            var image = Send(Send(Cls("NSImage"), Sel("alloc")), Sel("initWithSize:"), 18.0, 18.0);
+            var image = Send(Send(Cls("NSImage"), Sel("alloc")), Sel("initWithSize:"), 22.0, 20.0);
             var loaded = false;
             foreach (var name in new[] { "MenuBarIcon18.png", "MenuBarIcon36.png" })
             {
@@ -305,7 +319,7 @@ internal static class MacTrayApp
                         pin.AddrOfPinnedObject(), (IntPtr)bytes.Length);
                     var rep = Send(Cls("NSBitmapImageRep"), Sel("imageRepWithData:"), data);
                     if (rep == IntPtr.Zero) continue;
-                    SendVoid(rep, Sel("setSize:"), 18.0, 18.0);
+                    SendVoid(rep, Sel("setSize:"), 22.0, 20.0);
                     SendVoid(image, Sel("addRepresentation:"), rep);
                     loaded = true;
                 }
@@ -347,6 +361,109 @@ internal static class MacTrayApp
 
     private static string EscapeAs(string s) =>
         s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    /// <summary>
+    /// The pairing window, tray-mode edition: a native always-on-top panel
+    /// in the same outfit as the Windows one — near-black, cyan headline,
+    /// the code big and magenta. One window per device id; a mid-pair
+    /// reconnect replaces the window rather than stacking a twin. Server
+    /// callbacks arrive on background threads and AppKit only tolerates the
+    /// main one, so operations queue up here and a performSelectorOnMainThread
+    /// pokes the run loop to drain them. The code is also echoed through
+    /// ConsolePairingUI so it reaches the log when no window can appear.
+    /// </summary>
+    private sealed class TrayPairingUI : IPairingUI
+    {
+        private static readonly ConsolePairingUI Echo = new();
+        private static readonly object Gate = new();
+        private static readonly List<(bool Show, string Id, string Name, string Pin)> Queue = new();
+        private static readonly Dictionary<string, IntPtr> Open = new();
+
+        public void Show(string deviceId, string deviceName, string pin)
+        {
+            Echo.Show(deviceId, deviceName, pin);
+            lock (Gate) Queue.Add((true, deviceId, deviceName, pin));
+            Poke();
+        }
+
+        public void Close(string deviceId, bool success)
+        {
+            Echo.Close(deviceId, success);
+            lock (Gate) Queue.Add((false, deviceId, "", ""));
+            Poke();
+            if (success) Notify("Paired.");
+        }
+
+        private static void Poke() =>
+            SendVoid(_target, Sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
+                Sel("rhPairDrain:"), IntPtr.Zero, (sbyte)0);
+
+        internal static void DrainOnMainThread()
+        {
+            (bool Show, string Id, string Name, string Pin)[] ops;
+            lock (Gate)
+            {
+                ops = Queue.ToArray();
+                Queue.Clear();
+            }
+            foreach (var op in ops)
+            {
+                if (Open.Remove(op.Id, out var old))
+                {
+                    SendVoid(old, Sel("orderOut:"), IntPtr.Zero);
+                    Send(old, Sel("release"));
+                }
+                if (op.Show) Open[op.Id] = CreateWindow(op.Name, op.Pin);
+            }
+        }
+
+        private static IntPtr CreateWindow(string deviceName, string pin)
+        {
+            var win = Send(Send(Cls("NSWindow"), Sel("alloc")),
+                Sel("initWithContentRect:styleMask:backing:defer:"),
+                new NSRect(0, 0, 380, 230), 3 /* titled|closable */, 2 /* buffered */, (sbyte)1);
+            SendVoid(win, Sel("setReleasedWhenClosed:"), (sbyte)0);
+            SendVoid(win, Sel("setTitle:"), NSStr("Remote Helper — pairing"));
+            SendVoid(win, Sel("setLevel:"), (IntPtr)3); // floating: above normal windows
+            SendVoid(win, Sel("setBackgroundColor:"), Rgb(10, 10, 18));
+            // Dark title bar to match the panel, whatever the system theme.
+            var dark = Send(Cls("NSAppearance"), Sel("appearanceNamed:"), NSStr("NSAppearanceNameDarkAqua"));
+            if (dark != IntPtr.Zero) SendVoid(win, Sel("setAppearance:"), dark);
+
+            var content = Send(win, Sel("contentView"));
+            AddLabel(content, $"“{deviceName}” wants to connect",
+                new NSRect(10, 180, 360, 30), Mono(13, bold: true), Rgb(64, 230, 255));
+            AddLabel(content, pin,
+                new NSRect(10, 84, 360, 64), Mono(44, bold: true), Rgb(255, 90, 230));
+            AddLabel(content, "Type this code on the device.",
+                new NSRect(10, 46, 360, 16), Mono(10, bold: false), Rgb(140, 140, 150));
+            AddLabel(content, "You'll only be asked once per device.",
+                new NSRect(10, 26, 360, 16), Mono(10, bold: false), Rgb(140, 140, 150));
+
+            Send(win, Sel("center"));
+            SendVoid(win, Sel("makeKeyAndOrderFront:"), IntPtr.Zero);
+            SendVoid(Send(Cls("NSApplication"), Sel("sharedApplication")),
+                Sel("activateIgnoringOtherApps:"), (sbyte)1);
+            return win;
+        }
+
+        private static void AddLabel(IntPtr parent, string text, NSRect frame, IntPtr font, IntPtr color)
+        {
+            var label = Send(Cls("NSTextField"), Sel("labelWithString:"), NSStr(text));
+            SendVoid(label, Sel("setFrame:"), frame);
+            SendVoid(label, Sel("setAlignment:"), (IntPtr)1); // NSTextAlignmentCenter (1 since the 10.12 SDK unified with iOS; 2 is right)
+            SendVoid(label, Sel("setFont:"), font);
+            SendVoid(label, Sel("setTextColor:"), color);
+            SendVoid(parent, Sel("addSubview:"), label);
+        }
+
+        private static IntPtr Mono(double size, bool bold) =>
+            Send(Cls("NSFont"), Sel("monospacedSystemFontOfSize:weight:"), size, bold ? 0.4 : 0.0);
+
+        private static IntPtr Rgb(int r, int g, int b) =>
+            Send(Cls("NSColor"), Sel("colorWithSRGBRed:green:blue:alpha:"),
+                r / 255.0, g / 255.0, b / 255.0, 1.0);
+    }
 
     // ---- Objective-C runtime ----------------------------------------------
 
@@ -416,9 +533,33 @@ internal static class MacTrayApp
     private static extern IntPtr Send(IntPtr receiver, IntPtr selector, sbyte arg);
 
     // NSSize is two doubles passed in registers on both arm64 and x64 —
-    // identical to two plain double arguments.
+    // identical to two plain double arguments. NSRect (4 doubles) does NOT
+    // get that treatment on x64, so it's declared as a real struct and the
+    // runtime marshals it per the native ABI.
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct NSRect
+    {
+        public readonly double X, Y, W, H;
+        public NSRect(double x, double y, double w, double h) { X = x; Y = y; W = w; H = h; }
+    }
+
     [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
     private static extern IntPtr Send(IntPtr receiver, IntPtr selector, double w, double h);
+
+    [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
+    private static extern IntPtr Send(IntPtr receiver, IntPtr selector,
+        double r, double g, double b, double a);
+
+    [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
+    private static extern IntPtr Send(IntPtr receiver, IntPtr selector,
+        NSRect rect, nuint styleMask, nuint backing, sbyte defer);
+
+    [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
+    private static extern void SendVoid(IntPtr receiver, IntPtr selector, NSRect rect);
+
+    [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
+    private static extern void SendVoid(IntPtr receiver, IntPtr selector,
+        IntPtr arg1, IntPtr arg2, sbyte arg3);
 
     [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
     private static extern void SendVoid(IntPtr receiver, IntPtr selector, double w, double h);
