@@ -42,7 +42,11 @@ internal static class MacTrayApp
     private static readonly ActionImp ActionThunk = OnMenuAction;
     private static readonly ActionImp MenuUpdateThunk = OnMenuNeedsUpdate;
     private static readonly ActionImp MainDrainThunk = OnMainDrain;
-    private static readonly BoolImp ShouldPresentThunk = (_, _, _, _) => 1;
+    private static readonly PresentImp WillPresentThunk = OnWillPresentNotification;
+    private static readonly AuthImp AuthCompletionThunk = OnNotificationAuth;
+
+    private static bool InAppBundle =>
+        AppContext.BaseDirectory.Contains(".app/Contents/", StringComparison.Ordinal);
 
     // Work handed to the AppKit main thread (server callbacks and async
     // continuations arrive on background threads, and AppKit tolerates only
@@ -95,12 +99,31 @@ internal static class MacTrayApp
             Marshal.GetFunctionPointerForDelegate(MenuUpdateThunk), "v@:@");
         class_addMethod(cls, Sel("rhMainDrain:"),
             Marshal.GetFunctionPointerForDelegate(MainDrainThunk), "v@:@");
-        class_addMethod(cls, Sel("userNotificationCenter:shouldPresentNotification:"),
-            Marshal.GetFunctionPointerForDelegate(ShouldPresentThunk), "c@:@@");
+        class_addMethod(cls, Sel("userNotificationCenter:willPresentNotification:withCompletionHandler:"),
+            Marshal.GetFunctionPointerForDelegate(WillPresentThunk), "v@:@@@?");
         objc_registerClassPair(cls);
         _target = Send(Send(cls, Sel("alloc")), Sel("init"));
-        SendVoid(Send(Cls("NSUserNotificationCenter"), Sel("defaultUserNotificationCenter")),
-            Sel("setDelegate:"), _target);
+
+        // Notifications go through the modern UserNotifications framework —
+        // the NSUserNotification API this replaced is silently ignored on
+        // current macOS. Bundle-only: UNUserNotificationCenter throws in a
+        // bare dev process, where Notify falls back to the log anyway.
+        if (!InAppBundle) return;
+        NativeLibrary.Load("/System/Library/Frameworks/UserNotifications.framework/UserNotifications");
+        var center = Send(Cls("UNUserNotificationCenter"), Sel("currentNotificationCenter"));
+        SendVoid(center, Sel("setDelegate:"), _target);
+        Send(center, Sel("requestAuthorizationWithOptions:completionHandler:"),
+            (nuint)6 /* alert|sound */, MakeGlobalBlock(AuthCompletionThunk));
+    }
+
+    /// <summary>Banner even while the app is frontmost (banner|list = 24).</summary>
+    private static void OnWillPresentNotification(
+        IntPtr self, IntPtr sel, IntPtr center, IntPtr notification, IntPtr completion) =>
+        CallBlock(completion, 24);
+
+    private static void OnNotificationAuth(IntPtr block, sbyte granted, IntPtr error)
+    {
+        if (granted == 0) Log.Line("[warn] notifications not allowed — toasts go to this log only");
     }
 
     /// <summary>Run work on the AppKit main thread (fire and forget).</summary>
@@ -226,7 +249,8 @@ internal static class MacTrayApp
         var n = server.PairedCount;
         if (n == 0)
         {
-            Notify("No paired devices to clear.");
+            InfoAlertOnMain("No paired devices to clear.",
+                "Each device pairs the first time it connects.");
             return;
         }
         var word = n == 1 ? "device" : "devices";
@@ -257,13 +281,14 @@ internal static class MacTrayApp
             var tag = doc.RootElement.GetProperty("tag_name").GetString() ?? "";
             if (!Version.TryParse(tag.TrimStart('v', 'V'), out var latest))
             {
-                Notify($"Couldn't make sense of the latest release ({tag}).");
+                InfoAlertOnMain("Couldn't check for updates.",
+                    $"The latest release tag ({tag}) doesn't look like a version.");
                 return;
             }
             Version.TryParse(current.TrimStart('v'), out var mine);
             if (latest <= (mine ?? new Version(0, 0, 0)))
             {
-                Notify($"You're up to date — {current} is the latest.");
+                InfoAlertOnMain("You're up to date.", $"{current} is the latest version.");
                 return;
             }
             var download = await ConfirmOnMainAsync(
@@ -276,7 +301,7 @@ internal static class MacTrayApp
         catch (Exception ex)
         {
             Log.Line($"[warn] update check failed: {ex.Message}");
-            Notify($"Update check failed: {ex.Message}");
+            InfoAlertOnMain("Update check failed.", ex.Message);
         }
         finally
         {
@@ -368,17 +393,39 @@ internal static class MacTrayApp
     }
 
     /// <summary>
-    /// A real app notification (title, mascot icon and all) — osascript's
-    /// "display notification" would brand it as the script runner instead.
+    /// A real app notification (title, mascot icon and all), via the modern
+    /// UserNotifications framework. For passive events only — anything the
+    /// user is actively waiting on should be an alert instead, since
+    /// notification permission can be declined.
     /// </summary>
-    private static void Notify(string text) => OnMain(() =>
+    private static void Notify(string text)
     {
-        var note = Send(Send(Cls("NSUserNotification"), Sel("alloc")), Sel("init"));
-        SendVoid(note, Sel("setTitle:"), NSStr("Remote Helper"));
-        SendVoid(note, Sel("setInformativeText:"), NSStr(text));
-        SendVoid(Send(Cls("NSUserNotificationCenter"), Sel("defaultUserNotificationCenter")),
-            Sel("deliverNotification:"), note);
-        Send(note, Sel("release"));
+        Log.Line($"[sys]  {text}");
+        if (!InAppBundle) return;
+        OnMain(() =>
+        {
+            var content = Send(Send(Cls("UNMutableNotificationContent"), Sel("alloc")), Sel("init"));
+            SendVoid(content, Sel("setTitle:"), NSStr("Remote Helper"));
+            SendVoid(content, Sel("setBody:"), NSStr(text));
+            var request = Send(Cls("UNNotificationRequest"),
+                Sel("requestWithIdentifier:content:trigger:"),
+                NSStr(Guid.NewGuid().ToString()), content, IntPtr.Zero);
+            Send(Send(Cls("UNUserNotificationCenter"), Sel("currentNotificationCenter")),
+                Sel("addNotificationRequest:withCompletionHandler:"), request, IntPtr.Zero);
+            Send(content, Sel("release"));
+        });
+    }
+
+    /// <summary>One-button "OK" alert — the reply to a direct user action.</summary>
+    private static void InfoAlertOnMain(string message, string info) => OnMain(() =>
+    {
+        SendVoid(Send(Cls("NSApplication"), Sel("sharedApplication")),
+            Sel("activateIgnoringOtherApps:"), (sbyte)1);
+        var alert = Send(Send(Cls("NSAlert"), Sel("alloc")), Sel("init"));
+        SendVoid(alert, Sel("setMessageText:"), NSStr(message));
+        SendVoid(alert, Sel("setInformativeText:"), NSStr(info));
+        Send(alert, Sel("runModal"));
+        Send(alert, Sel("release"));
     });
 
     /// <summary>
@@ -527,7 +574,41 @@ internal static class MacTrayApp
     private delegate void ActionImp(IntPtr self, IntPtr sel, IntPtr sender);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate sbyte BoolImp(IntPtr self, IntPtr sel, IntPtr arg1, IntPtr arg2);
+    private delegate void PresentImp(IntPtr self, IntPtr sel,
+        IntPtr center, IntPtr notification, IntPtr completion);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void AuthImp(IntPtr block, sbyte granted, IntPtr error);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void BlockInvoke1(IntPtr block, nuint arg);
+
+    /// <summary>
+    /// Hand-rolled Objective-C block (global flavour: no captures, never
+    /// freed) wrapping a static delegate — the UserNotifications API speaks
+    /// only in blocks. Layout: isa, flags, reserved, invoke, descriptor.
+    /// </summary>
+    private static IntPtr MakeGlobalBlock(Delegate invoke)
+    {
+        var descriptor = Marshal.AllocHGlobal(16);
+        Marshal.WriteIntPtr(descriptor, 0, IntPtr.Zero); // reserved
+        Marshal.WriteIntPtr(descriptor, 8, (IntPtr)32);  // block size
+        var block = Marshal.AllocHGlobal(32);
+        var libSystem = NativeLibrary.Load("/usr/lib/libSystem.B.dylib");
+        Marshal.WriteIntPtr(block, 0, NativeLibrary.GetExport(libSystem, "_NSConcreteGlobalBlock"));
+        Marshal.WriteInt32(block, 8, 0x10000000); // BLOCK_IS_GLOBAL
+        Marshal.WriteInt32(block, 12, 0);
+        Marshal.WriteIntPtr(block, 16, Marshal.GetFunctionPointerForDelegate(invoke));
+        Marshal.WriteIntPtr(block, 24, descriptor);
+        return block;
+    }
+
+    /// <summary>Call a block handed to us by the system (invoke ptr at offset 16).</summary>
+    private static void CallBlock(IntPtr block, nuint arg)
+    {
+        if (block == IntPtr.Zero) return;
+        Marshal.GetDelegateForFunctionPointer<BlockInvoke1>(Marshal.ReadIntPtr(block, 16))(block, arg);
+    }
 
     private const string LibObjC = "/usr/lib/libobjc.A.dylib";
     private const string AppServices =
@@ -567,6 +648,9 @@ internal static class MacTrayApp
 
     [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
     private static extern IntPtr Send(IntPtr receiver, IntPtr selector, sbyte arg);
+
+    [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
+    private static extern IntPtr Send(IntPtr receiver, IntPtr selector, nuint arg1, IntPtr arg2);
 
     // NSSize is two doubles passed in registers on both arm64 and x64 —
     // identical to two plain double arguments. NSRect (4 doubles) does NOT
