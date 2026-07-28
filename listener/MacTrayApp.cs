@@ -41,7 +41,14 @@ internal static class MacTrayApp
     // Keep the IMP delegates alive for the lifetime of the process.
     private static readonly ActionImp ActionThunk = OnMenuAction;
     private static readonly ActionImp MenuUpdateThunk = OnMenuNeedsUpdate;
-    private static readonly ActionImp PairDrainThunk = OnPairDrain;
+    private static readonly ActionImp MainDrainThunk = OnMainDrain;
+    private static readonly BoolImp ShouldPresentThunk = (_, _, _, _) => 1;
+
+    // Work handed to the AppKit main thread (server callbacks and async
+    // continuations arrive on background threads, and AppKit tolerates only
+    // the main one). performSelectorOnMainThread pokes the run loop to drain.
+    private static readonly object MainGate = new();
+    private static readonly List<Action> MainQueue = new();
 
     public static void Run(int port, bool noMdns)
     {
@@ -75,8 +82,9 @@ internal static class MacTrayApp
 
     /// <summary>
     /// One runtime-built ObjC class serves as the menu items' action target,
-    /// the menu's delegate (for the live status line), and the main-thread
-    /// trampoline the pairing windows bounce through.
+    /// the menu's delegate (for the live status line), the main-thread
+    /// trampoline, and the notification-center delegate (so banners show
+    /// even while the app counts as frontmost).
     /// </summary>
     private static void CreateTarget()
     {
@@ -85,10 +93,37 @@ internal static class MacTrayApp
             Marshal.GetFunctionPointerForDelegate(ActionThunk), "v@:@");
         class_addMethod(cls, Sel("menuNeedsUpdate:"),
             Marshal.GetFunctionPointerForDelegate(MenuUpdateThunk), "v@:@");
-        class_addMethod(cls, Sel("rhPairDrain:"),
-            Marshal.GetFunctionPointerForDelegate(PairDrainThunk), "v@:@");
+        class_addMethod(cls, Sel("rhMainDrain:"),
+            Marshal.GetFunctionPointerForDelegate(MainDrainThunk), "v@:@");
+        class_addMethod(cls, Sel("userNotificationCenter:shouldPresentNotification:"),
+            Marshal.GetFunctionPointerForDelegate(ShouldPresentThunk), "c@:@@");
         objc_registerClassPair(cls);
         _target = Send(Send(cls, Sel("alloc")), Sel("init"));
+        SendVoid(Send(Cls("NSUserNotificationCenter"), Sel("defaultUserNotificationCenter")),
+            Sel("setDelegate:"), _target);
+    }
+
+    /// <summary>Run work on the AppKit main thread (fire and forget).</summary>
+    private static void OnMain(Action work)
+    {
+        lock (MainGate) MainQueue.Add(work);
+        SendVoid(_target, Sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
+            Sel("rhMainDrain:"), IntPtr.Zero, (sbyte)0);
+    }
+
+    private static void OnMainDrain(IntPtr self, IntPtr sel, IntPtr arg)
+    {
+        Action[] work;
+        lock (MainGate)
+        {
+            work = MainQueue.ToArray();
+            MainQueue.Clear();
+        }
+        foreach (var action in work)
+        {
+            try { action(); }
+            catch (Exception ex) { Log.Line($"[warn] main-thread work failed: {ex.Message}"); }
+        }
     }
 
     private static void BuildStatusItem()
@@ -139,9 +174,6 @@ internal static class MacTrayApp
             catch (Exception ex) { Log.Line($"[warn] menu action failed: {ex.Message}"); }
         }
     }
-
-    private static void OnPairDrain(IntPtr self, IntPtr sel, IntPtr arg) =>
-        TrayPairingUI.DrainOnMainThread();
 
     private static void OnMenuNeedsUpdate(IntPtr self, IntPtr sel, IntPtr menu)
     {
@@ -198,11 +230,10 @@ internal static class MacTrayApp
             return;
         }
         var word = n == 1 ? "device" : "devices";
-        var answer = RunAppleScript(
-            $"display dialog \"Forget all {n} paired {word}?\\n\\nEach one shows its pairing code on this screen again the next time it connects.\" " +
-            "with title \"Remote Helper — clear paired devices\" " +
-            "buttons {\"Cancel\", \"Forget\"} default button 1 cancel button 1 with icon caution");
-        if (answer is null || !answer.Contains("Forget")) return;
+        if (!ConfirmAlert($"Forget all {n} paired {word}?",
+                "Each one shows its pairing code on this screen again the next time it connects.",
+                action: "Forget", dismiss: "Cancel", actionDefault: false))
+            return;
         server.ForgetAllDevices();
         Notify($"Forgot {n} {word}. Each will ask to pair again.");
     }
@@ -235,11 +266,11 @@ internal static class MacTrayApp
                 Notify($"You're up to date — {current} is the latest.");
                 return;
             }
-            var answer = RunAppleScript(
-                $"display dialog \"Version {latest} is available (you have {current}).\\n\\nOpen the download page? Drag the new app into Applications to update.\" " +
-                "with title \"Remote Helper — update available\" " +
-                "buttons {\"Not now\", \"Download\"} default button 2 cancel button 1 with icon note");
-            if (answer is not null && answer.Contains("Download"))
+            var download = await ConfirmOnMainAsync(
+                $"Version {latest} is available (you have {current}).",
+                "Open the download page? Drag the new app into Applications to update.",
+                action: "Download", dismiss: "Not now", actionDefault: true);
+            if (download)
                 Process.Start("/usr/bin/open", new[] { ReleasesPage });
         }
         catch (Exception ex)
@@ -336,31 +367,49 @@ internal static class MacTrayApp
         }
     }
 
-    private static void Notify(string text) =>
-        RunAppleScript($"display notification \"{EscapeAs(text)}\" with title \"Remote Helper\"");
-
-    /// <returns>osascript's stdout, or null if it failed or was cancelled.</returns>
-    private static string? RunAppleScript(string script)
+    /// <summary>
+    /// A real app notification (title, mascot icon and all) — osascript's
+    /// "display notification" would brand it as the script runner instead.
+    /// </summary>
+    private static void Notify(string text) => OnMain(() =>
     {
-        try
-        {
-            var psi = new ProcessStartInfo("/usr/bin/osascript") { RedirectStandardOutput = true };
-            psi.ArgumentList.Add("-e");
-            psi.ArgumentList.Add(script);
-            using var p = Process.Start(psi)!;
-            var output = p.StandardOutput.ReadToEnd();
-            p.WaitForExit();
-            return p.ExitCode == 0 ? output : null;
-        }
-        catch (Exception ex)
-        {
-            Log.Line($"[warn] osascript failed: {ex.Message}");
-            return null;
-        }
+        var note = Send(Send(Cls("NSUserNotification"), Sel("alloc")), Sel("init"));
+        SendVoid(note, Sel("setTitle:"), NSStr("Remote Helper"));
+        SendVoid(note, Sel("setInformativeText:"), NSStr(text));
+        SendVoid(Send(Cls("NSUserNotificationCenter"), Sel("defaultUserNotificationCenter")),
+            Sel("deliverNotification:"), note);
+        Send(note, Sel("release"));
+    });
+
+    /// <summary>
+    /// A native two-button NSAlert (which wears the app icon, unlike the
+    /// osascript dialogs it replaced). Main thread only — see
+    /// ConfirmOnMainAsync for the anywhere version.
+    /// </summary>
+    /// <returns>true if the action button was pressed.</returns>
+    private static bool ConfirmAlert(string message, string info,
+        string action, string dismiss, bool actionDefault)
+    {
+        SendVoid(Send(Cls("NSApplication"), Sel("sharedApplication")),
+            Sel("activateIgnoringOtherApps:"), (sbyte)1);
+        var alert = Send(Send(Cls("NSAlert"), Sel("alloc")), Sel("init"));
+        SendVoid(alert, Sel("setMessageText:"), NSStr(message));
+        SendVoid(alert, Sel("setInformativeText:"), NSStr(info));
+        // The first button added is the default (Return key).
+        Send(alert, Sel("addButtonWithTitle:"), NSStr(actionDefault ? action : dismiss));
+        Send(alert, Sel("addButtonWithTitle:"), NSStr(actionDefault ? dismiss : action));
+        var response = Send(alert, Sel("runModal")); // first button = 1000, second = 1001
+        Send(alert, Sel("release"));
+        return response == (IntPtr)(actionDefault ? 1000 : 1001);
     }
 
-    private static string EscapeAs(string s) =>
-        s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    private static Task<bool> ConfirmOnMainAsync(string message, string info,
+        string action, string dismiss, bool actionDefault)
+    {
+        var tcs = new TaskCompletionSource<bool>();
+        OnMain(() => tcs.SetResult(ConfirmAlert(message, info, action, dismiss, actionDefault)));
+        return tcs.Task;
+    }
 
     /// <summary>
     /// The pairing window, tray-mode edition: a native always-on-top panel
@@ -375,46 +424,30 @@ internal static class MacTrayApp
     private sealed class TrayPairingUI : IPairingUI
     {
         private static readonly ConsolePairingUI Echo = new();
-        private static readonly object Gate = new();
-        private static readonly List<(bool Show, string Id, string Name, string Pin)> Queue = new();
-        private static readonly Dictionary<string, IntPtr> Open = new();
+        private static readonly Dictionary<string, IntPtr> Open = new(); // main thread only
 
         public void Show(string deviceId, string deviceName, string pin)
         {
             Echo.Show(deviceId, deviceName, pin);
-            lock (Gate) Queue.Add((true, deviceId, deviceName, pin));
-            Poke();
+            OnMain(() =>
+            {
+                Destroy(deviceId);
+                Open[deviceId] = CreateWindow(deviceName, pin);
+            });
         }
 
         public void Close(string deviceId, bool success)
         {
             Echo.Close(deviceId, success);
-            lock (Gate) Queue.Add((false, deviceId, "", ""));
-            Poke();
+            OnMain(() => Destroy(deviceId));
             if (success) Notify("Paired.");
         }
 
-        private static void Poke() =>
-            SendVoid(_target, Sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
-                Sel("rhPairDrain:"), IntPtr.Zero, (sbyte)0);
-
-        internal static void DrainOnMainThread()
+        private static void Destroy(string deviceId)
         {
-            (bool Show, string Id, string Name, string Pin)[] ops;
-            lock (Gate)
-            {
-                ops = Queue.ToArray();
-                Queue.Clear();
-            }
-            foreach (var op in ops)
-            {
-                if (Open.Remove(op.Id, out var old))
-                {
-                    SendVoid(old, Sel("orderOut:"), IntPtr.Zero);
-                    Send(old, Sel("release"));
-                }
-                if (op.Show) Open[op.Id] = CreateWindow(op.Name, op.Pin);
-            }
+            if (!Open.Remove(deviceId, out var win)) return;
+            SendVoid(win, Sel("orderOut:"), IntPtr.Zero);
+            Send(win, Sel("release"));
         }
 
         private static IntPtr CreateWindow(string deviceName, string pin)
@@ -492,6 +525,9 @@ internal static class MacTrayApp
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void ActionImp(IntPtr self, IntPtr sel, IntPtr sender);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate sbyte BoolImp(IntPtr self, IntPtr sel, IntPtr arg1, IntPtr arg2);
 
     private const string LibObjC = "/usr/lib/libobjc.A.dylib";
     private const string AppServices =
