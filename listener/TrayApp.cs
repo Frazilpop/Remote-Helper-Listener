@@ -44,7 +44,7 @@ internal static class TrayApp
         var server = Program.CreateServer(echo: false, new WindowsPairingUI(marshaller));
         var serverTask = Program.RunServerAsync(server, port, noMdns, cts.Token);
 
-        var version = ListenerVersion();
+        var version = Program.ListenerVersion();
         using var icon = new NotifyIcon
         {
             Icon = LoadTrayIcon(),
@@ -197,7 +197,7 @@ internal static class TrayApp
             icon.ShowBalloonTip(4000);
         }
 
-        var current = ListenerVersion(); // "v1.4.0"
+        var current = Program.ListenerVersion(); // "v1.4.0"
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
@@ -270,18 +270,6 @@ internal static class TrayApp
         else
             key.DeleteValue(RunValueName, throwOnMissingValue: false);
         Log.Line($"[sys]  start with Windows: {(enabled ? "on" : "off")}");
-    }
-
-    /// <summary>"v1.3.0" — the csproj &lt;Version&gt;, stripped of any "+sha"
-    /// suffix newer SDKs append to the informational version.</summary>
-    private static string ListenerVersion()
-    {
-        var assembly = Assembly.GetExecutingAssembly();
-        var info = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion.Split('+')[0];
-        return "v" + (string.IsNullOrEmpty(info)
-            ? assembly.GetName().Version?.ToString(3) ?? "?"
-            : info);
     }
 
     private static Icon LoadTrayIcon()

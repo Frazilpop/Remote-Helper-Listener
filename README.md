@@ -39,22 +39,21 @@ administrator too.
 
 ## Install (Mac)
 
-1. Download `RemoteHelperListener-mac-arm64.zip` (Apple Silicon) or
-   `RemoteHelperListener-mac-x64.zip` (Intel) from the
-   [Releases page](../../releases) and unzip it.
-2. Run it from a terminal: `./RemoteHelperListener`. First run: the
-   binary is unsigned, so macOS will refuse politely — approve it under
-   **System Settings → Privacy & Security → Open Anyway**, or clear the
-   quarantine flag instead:
-   `xattr -d com.apple.quarantine RemoteHelperListener`.
+1. Download `RemoteHelperListener-mac-arm64.dmg` (Apple Silicon) or
+   `RemoteHelperListener-mac-x64.dmg` (Intel) from the
+   [Releases page](../../releases).
+2. Open the DMG, drag **Remote Helper** into **Applications**, and launch
+   it. The app is signed and notarized, so there are no Gatekeeper hoops —
+   it appears as a keyboard icon in the menu bar.
 3. Grant the two permissions macOS asks about:
    - **Local Network** — so devices can find and reach it.
-   - **Accessibility** (System Settings → Privacy & Security →
-     Accessibility, for your terminal app) — so it's allowed to type.
+   - **Accessibility** — so it's allowed to type. The app asks on first
+     launch; flip the switch for Remote Helper in **System Settings →
+     Privacy & Security → Accessibility**.
 
 Pairing works like on Windows: a dialog shows the 6-digit code the first
-time a new device connects. The listener runs for as long as its
-terminal window stays open — there's no menu bar app (yet).
+time a new device connects. The menu bar icon shows who's connected and
+has a **Start at login** toggle so the listener is always ready.
 
 ## Build from source
 
@@ -64,7 +63,8 @@ The listener is one C#/.NET 7 codebase that targets two platforms:
 # Windows tray app (self-contained single exe):
 tools/build-windows.sh          # cross-compiles from macOS/Linux too
 
-# macOS binaries (self-contained, both architectures):
+# macOS menu bar app (self-contained .app in a DMG, both architectures;
+# signs with your Developer ID certificate if the keychain has one):
 tools/build-mac.sh
 
 # macOS, straight from source:

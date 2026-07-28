@@ -1,3 +1,4 @@
+using System.Reflection;
 using Makaretu.Dns;
 
 namespace RemoteHelper.Listener;
@@ -20,7 +21,14 @@ public static class Program
         // "announce yourself"; normal starts (autostart, manual) stay silent.
         TrayApp.Run(port, noMdns, justInstalled: args.Contains("--installed"));
 #else
-        RunConsole(port, noMdns, echo);
+        // Launched from inside "Remote Helper.app" (or with --tray): menu bar
+        // app. `dotnet run` and the raw binary keep the console face for
+        // development; --echo is protocol testing and always stays console.
+        bool inAppBundle = AppContext.BaseDirectory.Contains(".app/Contents/", StringComparison.Ordinal);
+        if (OperatingSystem.IsMacOS() && !echo && (inAppBundle || args.Contains("--tray")))
+            MacTrayApp.Run(port, noMdns);
+        else
+            RunConsole(port, noMdns, echo);
 #endif
     }
 
@@ -52,6 +60,19 @@ public static class Program
         RunServerAsync(server, port, noMdns, cts.Token).GetAwaiter().GetResult();
     }
 #endif
+
+    /// <summary>"v1.6.0" — the csproj &lt;Version&gt;, stripped of any "+sha"
+    /// suffix newer SDKs append to the informational version. Shown in both
+    /// tray menus and compared against the latest release tag.</summary>
+    public static string ListenerVersion()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var info = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion.Split('+')[0];
+        return "v" + (string.IsNullOrEmpty(info)
+            ? assembly.GetName().Version?.ToString(3) ?? "?"
+            : info);
+    }
 
     public static Server CreateServer(bool echo, IPairingUI pairing) =>
         new(KeyInjectorFactory.Create(echo), Environment.MachineName, new TrustStore(), pairing);
