@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text.Json;
@@ -107,8 +108,10 @@ internal static class MacTrayApp
         var item = Send(statusBar, Sel("statusItemWithLength:"), -1.0);
         Send(item, Sel("retain")); // the status bar holds only a weak reference
         var button = Send(item, Sel("button"));
-        var image = Send(Cls("NSImage"), Sel("imageWithSystemSymbolName:accessibilityDescription:"),
-            NSStr("keyboard"), NSStr("Remote Helper"));
+        var image = LoadMascotIcon();
+        if (image == IntPtr.Zero) // fall back to a generic keyboard glyph
+            image = Send(Cls("NSImage"), Sel("imageWithSystemSymbolName:accessibilityDescription:"),
+                NSStr("keyboard"), NSStr("Remote Helper"));
         if (image != IntPtr.Zero)
             SendVoid(button, Sel("setImage:"), image);
         else
@@ -277,6 +280,48 @@ internal static class MacTrayApp
         }
     }
 
+    /// <summary>
+    /// The mascot, embedded as 18/36px PNGs and combined into one 18pt
+    /// template image — macOS then renders it black or white to match the
+    /// menu bar, like every native status icon.
+    /// </summary>
+    private static IntPtr LoadMascotIcon()
+    {
+        try
+        {
+            var image = Send(Send(Cls("NSImage"), Sel("alloc")), Sel("initWithSize:"), 18.0, 18.0);
+            var loaded = false;
+            foreach (var name in new[] { "MenuBarIcon18.png", "MenuBarIcon36.png" })
+            {
+                using var stream = Assembly.GetExecutingAssembly()
+                    .GetManifestResourceStream("RemoteHelper.Listener.mac." + name);
+                if (stream is null) continue;
+                var bytes = new byte[stream.Length];
+                stream.ReadExactly(bytes);
+                var pin = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+                try
+                {
+                    var data = Send(Cls("NSData"), Sel("dataWithBytes:length:"),
+                        pin.AddrOfPinnedObject(), (IntPtr)bytes.Length);
+                    var rep = Send(Cls("NSBitmapImageRep"), Sel("imageRepWithData:"), data);
+                    if (rep == IntPtr.Zero) continue;
+                    SendVoid(rep, Sel("setSize:"), 18.0, 18.0);
+                    SendVoid(image, Sel("addRepresentation:"), rep);
+                    loaded = true;
+                }
+                finally { pin.Free(); }
+            }
+            if (!loaded) return IntPtr.Zero;
+            SendVoid(image, Sel("setTemplate:"), (sbyte)1);
+            return image;
+        }
+        catch (Exception ex)
+        {
+            Log.Line($"[warn] mascot icon failed to load: {ex.Message}");
+            return IntPtr.Zero;
+        }
+    }
+
     private static void Notify(string text) =>
         RunAppleScript($"display notification \"{EscapeAs(text)}\" with title \"Remote Helper\"");
 
@@ -369,6 +414,17 @@ internal static class MacTrayApp
 
     [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
     private static extern IntPtr Send(IntPtr receiver, IntPtr selector, sbyte arg);
+
+    // NSSize is two doubles passed in registers on both arm64 and x64 —
+    // identical to two plain double arguments.
+    [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
+    private static extern IntPtr Send(IntPtr receiver, IntPtr selector, double w, double h);
+
+    [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
+    private static extern void SendVoid(IntPtr receiver, IntPtr selector, double w, double h);
+
+    [DllImport(LibObjC, EntryPoint = "objc_msgSend")]
+    private static extern void SendVoid(IntPtr receiver, IntPtr selector, sbyte arg);
 
     [DllImport(LibObjC, EntryPoint = "objc_msgSend", CharSet = CharSet.Ansi)]
     private static extern IntPtr Send(IntPtr receiver, IntPtr selector,

@@ -17,7 +17,7 @@
          "Check for updates" compares it against the latest release tag, and
          tools/publish-public.sh refuses a release tag that disagrees.
          Bump BEFORE building a release exe. -->
-    <Version>1.6.0</Version>
+    <Version>1.6.1</Version>
   </PropertyGroup>
 
   <PropertyGroup Condition="$(TargetFramework.Contains('windows'))">
@@ -32,6 +32,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="app.ico" />
+    <EmbeddedResource Include="mac/MenuBarIcon18.png" />
+    <EmbeddedResource Include="mac/MenuBarIcon36.png" />
     <PackageReference Include="Makaretu.Dns.Multicast" Version="0.27.0" />
   </ItemGroup>
 
