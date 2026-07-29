@@ -48,6 +48,14 @@ public sealed class WindowsKeyInjector : IKeyInjector
         ["down"] = 0x28,      // VK_DOWN
         ["delete"] = 0x2E,    // VK_DELETE
         ["menu"] = 0x5D,      // VK_APPS — the context-menu key
+        ["space"] = 0x20,     // VK_SPACE — as a KEY so player hotkeys fire
+        ["f"] = 0x46,         // fullscreen in VLC/YouTube/most players
+        ["mute"] = 0xAD,      // VK_VOLUME_MUTE
+        ["volumedown"] = 0xAE, // VK_VOLUME_DOWN
+        ["volumeup"] = 0xAF,  // VK_VOLUME_UP
+        ["nexttrack"] = 0xB0, // VK_MEDIA_NEXT_TRACK
+        ["prevtrack"] = 0xB1, // VK_MEDIA_PREV_TRACK
+        ["playpause"] = 0xB3, // VK_MEDIA_PLAY_PAUSE
         ["f7"] = 0x76,        // VK_F7
         ["f8"] = 0x77,        // VK_F8
         ["f9"] = 0x78,        // VK_F9

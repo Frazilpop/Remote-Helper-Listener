@@ -76,6 +76,13 @@ Named keys: `backspace`, `return`, `tab`, `escape`, `delete`
 (forward-delete), `up`, `down`, `left`, `right`, `f7`–`f12`, and `menu`
 (the context-menu key).
 
+Media-remote keys (added in listener v1.8): `space` and `f` as real key
+presses (so player hotkeys — play/pause and fullscreen — fire, which
+Unicode-injected text can't guarantee), plus the dedicated media keys
+`playpause`, `prevtrack`, `nexttrack`, `volumeup`, `volumedown`, `mute`
+(virtual keys on Windows; NX system-defined HID events on macOS). An
+unknown key name is ignored — older listeners simply do nothing.
+
 Text is injected as Unicode (`KEYEVENTF_UNICODE` on Windows,
 `CGEventKeyboardSetUnicodeString` on macOS), so the PC's keyboard layout
 is irrelevant — `£` is `£` everywhere.
