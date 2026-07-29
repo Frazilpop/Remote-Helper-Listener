@@ -27,12 +27,6 @@ public sealed class TrustStore
 
     public int Count { get { lock (_lock) return _devices.Count; } }
 
-    /// <summary>Distinct names of the paired devices, for display.</summary>
-    public string[] Names
-    {
-        get { lock (_lock) return _devices.Select(d => d.Name).Distinct().OrderBy(n => n).ToArray(); }
-    }
-
     public bool IsTrusted(string deviceId)
     {
         lock (_lock) return _devices.Any(d => d.DeviceId == deviceId);

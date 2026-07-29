@@ -83,19 +83,15 @@ public sealed class Server
     public int PairedCount => _trust.Count;
 
     /// <summary>The tray menus' one-line status, identical on both platforms:
-    /// who's connected right now or, when nobody is, which paired devices
-    /// could connect — by name, never as a bare count.</summary>
+    /// who's connected right now, by name — or a plain "waiting" when nobody
+    /// is. Idle deliberately names no devices: any device may pair or return,
+    /// so listing past ones only misleads (especially right after a clear).</summary>
     public string StatusSummary()
     {
         var clients = ConnectedClients;
-        if (clients.Length > 0) return $"Connected: {string.Join(", ", clients)}";
-        var paired = _trust.Names;
-        return paired.Length switch
-        {
-            0 => "Waiting for a device to pair",
-            <= 4 => $"Waiting for {string.Join(", ", paired)}",
-            _ => $"Waiting for {string.Join(", ", paired.Take(3))} +{paired.Length - 3} more",
-        };
+        return clients.Length == 0
+            ? "Waiting for a device"
+            : $"Connected: {string.Join(", ", clients)}";
     }
 
     /// <summary>The tray's "clear paired devices": forget every trust and drop
