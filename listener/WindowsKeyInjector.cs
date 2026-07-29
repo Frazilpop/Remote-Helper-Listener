@@ -65,9 +65,12 @@ public sealed class WindowsKeyInjector : IKeyInjector
     };
 
     // These live in the extended-key group; without the flag some apps
-    // see numpad keys instead.
+    // see numpad keys instead — and the media/volume keys are E0-prefixed
+    // on real keyboards, so they get the flag too.
     private static readonly HashSet<string> ExtendedKeys =
-        new() { "left", "up", "right", "down", "delete", "menu" };
+        new() { "left", "up", "right", "down", "delete", "menu",
+                "mute", "volumedown", "volumeup",
+                "nexttrack", "prevtrack", "playpause" };
 
     private const uint INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
