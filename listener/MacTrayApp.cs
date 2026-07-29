@@ -350,16 +350,16 @@ internal static class MacTrayApp
     }
 
     /// <summary>
-    /// The mascot, embedded as 1x/2x PNGs and combined into one 22x18pt
-    /// template image (his monitor is wider than tall, and the status item
-    /// stretches to fit) — macOS then renders it black or white to match
-    /// the menu bar, like every native status icon.
+    /// The mascot, embedded as 1x/2x PNGs and combined into one 18x18pt
+    /// template image (his monitor still runs wider than tall within the
+    /// square) — macOS then renders it black or white to match the menu
+    /// bar, like every native status icon.
     /// </summary>
     private static IntPtr LoadMascotIcon()
     {
         try
         {
-            var image = Send(Send(Cls("NSImage"), Sel("alloc")), Sel("initWithSize:"), 22.0, 20.0);
+            var image = Send(Send(Cls("NSImage"), Sel("alloc")), Sel("initWithSize:"), 18.0, 18.0);
             var loaded = false;
             foreach (var name in new[] { "MenuBarIcon18.png", "MenuBarIcon36.png" })
             {
@@ -375,7 +375,7 @@ internal static class MacTrayApp
                         pin.AddrOfPinnedObject(), (IntPtr)bytes.Length);
                     var rep = Send(Cls("NSBitmapImageRep"), Sel("imageRepWithData:"), data);
                     if (rep == IntPtr.Zero) continue;
-                    SendVoid(rep, Sel("setSize:"), 22.0, 20.0);
+                    SendVoid(rep, Sel("setSize:"), 18.0, 18.0);
                     SendVoid(image, Sel("addRepresentation:"), rep);
                     loaded = true;
                 }
