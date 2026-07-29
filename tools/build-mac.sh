@@ -102,9 +102,19 @@ EOF
     mkdir -p "$STAGE"
     cp -R "$APP" "$STAGE/"
     ln -s /Applications "$STAGE/Applications"
+    cp listener/mac/DMGIcon.icns "$STAGE/.VolumeIcon.icns"
     DMG="dist/mac/RemoteHelperListener-mac-$ARCH.dmg"
     rm -f "$DMG"
-    hdiutil create -volname "Remote Helper" -srcfolder "$STAGE" -format UDZO -quiet "$DMG"
+    # The branded volume icon needs the custom-icon Finder flag ON THE
+    # VOLUME, which only sticks when set on a mounted writable image —
+    # so build read-write first, flag it, then convert to compressed.
+    RW="$OUT/rw.dmg"
+    hdiutil create -volname "Remote Helper" -srcfolder "$STAGE" -format UDRW -quiet "$RW"
+    MOUNT="$(hdiutil attach -readwrite -noverify -noautoopen "$RW" | sed -n 's/.*	\(\/Volumes\/.*\)/\1/p')"
+    SetFile -a C "$MOUNT"
+    hdiutil detach "$MOUNT" -quiet
+    hdiutil convert "$RW" -format UDZO -quiet -o "$DMG"
+    rm -f "$RW"
     if [ -n "$SIGN_ID" ]; then
         codesign --force --timestamp --sign "$SIGN_ID" "$DMG"
     fi
