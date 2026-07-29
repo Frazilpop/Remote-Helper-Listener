@@ -110,23 +110,17 @@ internal static class TrayApp
         menu.Items.Add(quit);
         icon.ContextMenuStrip = menu;
 
-        // Live status: the menu line tracks who's connected (polled on the
-        // UI thread — no cross-thread marshalling to get wrong), and
-        // double-clicking the icon pops the same summary as a balloon.
-        string Summary()
-        {
-            var clients = server.ConnectedClients;
-            return clients.Length == 0
-                ? $"waiting for a device ({server.PairedCount} paired)"
-                : $"Connected: {string.Join(", ", clients)}";
-        }
+        // Live status: the menu line tracks who's connected, or who's paired
+        // while nobody is (polled on the UI thread — no cross-thread
+        // marshalling to get wrong), and double-clicking the icon pops the
+        // same summary as a balloon.
         var poll = new System.Windows.Forms.Timer { Interval = 2000 };
-        poll.Tick += (_, _) => status.Text = Summary();
+        poll.Tick += (_, _) => status.Text = server.StatusSummary();
         poll.Start();
         icon.DoubleClick += (_, _) =>
         {
             icon.BalloonTipTitle = $"Remote Helper {version}";
-            icon.BalloonTipText = $"{Summary()} · port {port}";
+            icon.BalloonTipText = $"{server.StatusSummary()} · port {port}";
             icon.ShowBalloonTip(4000);
         };
 

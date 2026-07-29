@@ -82,6 +82,22 @@ public sealed class Server
     /// <summary>How many devices have ever paired with this PC.</summary>
     public int PairedCount => _trust.Count;
 
+    /// <summary>The tray menus' one-line status, identical on both platforms:
+    /// who's connected right now or, when nobody is, which paired devices
+    /// could connect — by name, never as a bare count.</summary>
+    public string StatusSummary()
+    {
+        var clients = ConnectedClients;
+        if (clients.Length > 0) return $"Connected: {string.Join(", ", clients)}";
+        var paired = _trust.Names;
+        return paired.Length switch
+        {
+            0 => "Waiting for a device to pair",
+            <= 4 => $"Waiting for {string.Join(", ", paired)}",
+            _ => $"Waiting for {string.Join(", ", paired.Take(3))} +{paired.Length - 3} more",
+        };
+    }
+
     /// <summary>The tray's "clear paired devices": forget every trust and drop
     /// every live connection, so each device re-pairs on its automatic
     /// reconnect a few seconds later — nothing keeps typing on old credit.</summary>

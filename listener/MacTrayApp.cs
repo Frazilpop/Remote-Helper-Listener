@@ -202,11 +202,7 @@ internal static class MacTrayApp
     {
         var server = _server;
         if (server is null || _statusLine == IntPtr.Zero) return;
-        var clients = server.ConnectedClients;
-        var summary = clients.Length == 0
-            ? $"Waiting for a device ({server.PairedCount} paired) · port {_port}"
-            : $"Connected: {string.Join(", ", clients)}";
-        SendVoid(_statusLine, Sel("setTitle:"), NSStr(summary));
+        SendVoid(_statusLine, Sel("setTitle:"), NSStr($"{server.StatusSummary()} · port {_port}"));
     }
 
     private static void ToggleStartAtLogin()
