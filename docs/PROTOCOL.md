@@ -73,8 +73,15 @@ per (device, PC) pair: N devices and M PCs each pair once, independently.
 ```
 
 Named keys: `backspace`, `return`, `tab`, `escape`, `delete`
-(forward-delete), `up`, `down`, `left`, `right`, `f7`–`f12`, and `menu`
-(the context-menu key).
+(forward-delete), `up`, `down`, `left`, `right`, `f7`–`f12`, `menu`
+(the context-menu key), and (listener v1.10) `pageup`, `pagedown`,
+`home`, `end`.
+
+Single-character keys (listener v1.10): a key name that is one printable
+character — `a`–`z`, `0`–`9`, or one of `` - = [ ] \ ; ' , . / ` `` —
+presses the corresponding physical key, US-layout position (the same
+deal `f` always had). A real key press, so player hotkeys fire, which
+Unicode-injected text can't guarantee.
 
 Media-remote keys (added in listener v1.8): `space` and `f` as real key
 presses (so player hotkeys — play/pause and fullscreen — fire, which

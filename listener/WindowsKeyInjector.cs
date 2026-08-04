@@ -26,7 +26,8 @@ public sealed class WindowsKeyInjector : IKeyInjector
 
     public bool InjectKey(string keyName)
     {
-        if (!VirtualKeys.TryGetValue(keyName, out var vk)) return false;
+        if (!VirtualKeys.TryGetValue(keyName, out var vk) &&
+            !TryCharKey(keyName, out vk)) return false;
         bool extended = ExtendedKeys.Contains(keyName);
         Send(new[]
         {
@@ -34,6 +35,35 @@ public sealed class WindowsKeyInjector : IKeyInjector
             VkInput(vk, keyUp: true, extended),
         });
         return true;
+    }
+
+    // A single printable character names its physical key (added in v1.10) —
+    // a real key press, unlike text injection, so player hotkeys fire.
+    // Letters/digits map straight to their VK codes; US punctuation to the
+    // OEM keys. Same idea "f" pioneered, generalised.
+    private static bool TryCharKey(string keyName, out ushort vk)
+    {
+        vk = 0;
+        if (keyName.Length != 1) return false;
+        char c = keyName[0];
+        if (c is >= 'a' and <= 'z') { vk = (ushort)('A' + (c - 'a')); return true; }
+        if (c is >= '0' and <= '9') { vk = (ushort)c; return true; }
+        vk = c switch
+        {
+            ';' => 0xBA,  // VK_OEM_1
+            '=' => 0xBB,  // VK_OEM_PLUS
+            ',' => 0xBC,  // VK_OEM_COMMA
+            '-' => 0xBD,  // VK_OEM_MINUS
+            '.' => 0xBE,  // VK_OEM_PERIOD
+            '/' => 0xBF,  // VK_OEM_2
+            '`' => 0xC0,  // VK_OEM_3
+            '[' => 0xDB,  // VK_OEM_4
+            '\\' => 0xDC, // VK_OEM_5
+            ']' => 0xDD,  // VK_OEM_6
+            '\'' => 0xDE, // VK_OEM_7
+            _ => (ushort)0,
+        };
+        return vk != 0;
     }
 
     private static readonly Dictionary<string, ushort> VirtualKeys = new()
@@ -62,6 +92,10 @@ public sealed class WindowsKeyInjector : IKeyInjector
         ["f10"] = 0x79,       // VK_F10
         ["f11"] = 0x7A,       // VK_F11
         ["f12"] = 0x7B,       // VK_F12
+        ["pageup"] = 0x21,    // VK_PRIOR
+        ["pagedown"] = 0x22,  // VK_NEXT
+        ["end"] = 0x23,       // VK_END
+        ["home"] = 0x24,      // VK_HOME
     };
 
     // These live in the extended-key group; without the flag some apps
@@ -70,7 +104,8 @@ public sealed class WindowsKeyInjector : IKeyInjector
     private static readonly HashSet<string> ExtendedKeys =
         new() { "left", "up", "right", "down", "delete", "menu",
                 "mute", "volumedown", "volumeup",
-                "nexttrack", "prevtrack", "playpause" };
+                "nexttrack", "prevtrack", "playpause",
+                "pageup", "pagedown", "home", "end" };
 
     private const uint INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;

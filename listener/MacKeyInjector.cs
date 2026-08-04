@@ -29,7 +29,11 @@ public sealed class MacKeyInjector : IKeyInjector
             PostSystemKey(nx, down: false);
             return true;
         }
-        if (!KeyCodes.TryGetValue(keyName, out var code)) return false;
+        if (!KeyCodes.TryGetValue(keyName, out var code))
+        {
+            if (keyName.Length != 1 || !CharCodes.TryGetValue(keyName[0], out code))
+                return false;
+        }
         PostKey(code, down: true);
         PostKey(code, down: false);
         return true;
@@ -56,6 +60,27 @@ public sealed class MacKeyInjector : IKeyInjector
         ["menu"] = 110,      // kVK_ContextualMenu
         ["space"] = 49,      // kVK_Space — as a KEY so player hotkeys fire
         ["f"] = 3,           // kVK_ANSI_F — fullscreen in most players
+        ["pageup"] = 116,    // kVK_PageUp
+        ["pagedown"] = 121,  // kVK_PageDown
+        ["home"] = 115,      // kVK_Home
+        ["end"] = 119,       // kVK_End
+    };
+
+    // A single printable character names its physical key (added in v1.10) —
+    // a real key press, so player hotkeys fire. kVK_ANSI_* positions, so a
+    // non-US layout gets the US key's position, same as "f" always has.
+    private static readonly Dictionary<char, ushort> CharCodes = new()
+    {
+        ['a'] = 0, ['b'] = 11, ['c'] = 8, ['d'] = 2, ['e'] = 14, ['f'] = 3,
+        ['g'] = 5, ['h'] = 4, ['i'] = 34, ['j'] = 38, ['k'] = 40, ['l'] = 37,
+        ['m'] = 46, ['n'] = 45, ['o'] = 31, ['p'] = 35, ['q'] = 12, ['r'] = 15,
+        ['s'] = 1, ['t'] = 17, ['u'] = 32, ['v'] = 9, ['w'] = 13, ['x'] = 7,
+        ['y'] = 16, ['z'] = 6,
+        ['0'] = 29, ['1'] = 18, ['2'] = 19, ['3'] = 20, ['4'] = 21,
+        ['5'] = 23, ['6'] = 22, ['7'] = 26, ['8'] = 28, ['9'] = 25,
+        ['-'] = 27, ['='] = 24, ['['] = 33, [']'] = 30, ['\\'] = 42,
+        [';'] = 41, ['\''] = 39, [','] = 43, ['.'] = 47, ['/'] = 44,
+        ['`'] = 50,
     };
 
     // Volume and media-transport keys have no virtual keycodes — they're
